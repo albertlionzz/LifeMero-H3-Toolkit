@@ -43,10 +43,8 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-try:
-    import requests
-except ImportError:
-    sys.exit("缺少 requests 库，请先: pip install requests")
+# 注意：requests 采用延迟导入（见 call_llm）——mock 模式验证管道零依赖，
+# 只有真实调用 LLM 时才需要 pip install requests
 
 # 标准阶段标签 → 时间轴配色（与 ui_mockup.html 一致，Flutter 端 Hex 值相同）
 PHASE_TAGS = {
@@ -143,11 +141,42 @@ def apply_vector(base: list, delta: list) -> list:
     return [round(max(0.0, min(1.0, b + d)), 3) for b, d in zip(base, delta)]
 
 
-def parse_llm_json(text: str) -> dict:
-    m = re.search(r"\{.*\}", text, re.DOTALL)
-    if not m:
+def extract_json(text: str) -> str:
+    """从 LLM 回复中提取第一个完整 JSON 对象字符串。
+
+    容忍：markdown 代码块包裹、前后杂讯、JSON 内一级以上嵌套、字符串中的花括号。
+    与 annotate_metatype.py 中的同名函数保持一致。
+    """
+    t = text.strip()
+    if t.startswith("```"):
+        t = re.sub(r"^```(?:json)?\s*", "", t)
+        t = re.sub(r"\s*```\s*$", "", t)
+    start = t.find("{")
+    if start < 0:
         raise ValueError("回复中未找到 JSON")
-    obj = json.loads(m.group(0))
+    depth, in_str, esc = 0, False, False
+    for i in range(start, len(t)):
+        ch = t[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+        elif ch == '"':
+            in_str = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return t[start:i + 1]
+    raise ValueError("回复中 JSON 不完整")
+
+
+def parse_llm_json(text: str) -> dict:
+    obj = json.loads(extract_json(text))
     if not obj.get("phases") or not (2 <= len(obj["phases"]) <= 6):
         raise ValueError(f"阶段数异常: {len(obj.get('phases', []))}")
     obj["phases"] = validate_phases(obj["phases"])
@@ -155,6 +184,10 @@ def parse_llm_json(text: str) -> dict:
 
 
 def call_llm(prompt: str, model: str, base_url: str, api_key: str, max_retry: int = 3) -> dict:
+    try:
+        import requests
+    except ImportError:
+        raise RuntimeError("真实生成模式需要 requests 库，请先: pip install requests（mock 模式无需安装）")
     for attempt in range(max_retry):
         try:
             r = requests.post(
@@ -279,7 +312,7 @@ def main():
                 result = mock_phase(p, base_vec)
             else:
                 prompt = build_prompt(p, 4)  # 默认切4段
-                result = parse_llm_json_or(call_llm(prompt, args.model, args.base_url,
+                result = backfill_metatype(call_llm(prompt, args.model, args.base_url,
                                                     os.environ.get("OPENAI_API_KEY", "")), p)
             for ph in result["phases"]:
                 ph["vector"] = apply_vector(base_vec, ph.pop("vector_delta"))
@@ -302,7 +335,7 @@ def main():
     print(f"\n完成：成功 {done}，失败 {failed}\n输出：{args.output}\n复核：{args.review}")
 
 
-def parse_llm_json_or(result: dict, person: dict) -> dict:
+def backfill_metatype(result: dict, person: dict) -> dict:
     # 真实模式下若 LLM 顺带返回了元类型且人物未标注过，回填到 _annotation
     if "metatype" in result and "_annotation" not in person:
         person["_annotation"] = {"metatype": result["metatype"],

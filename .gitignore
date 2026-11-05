@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# 管道输出（本地生成，勿提交；persons_sample.json 为自带示例数据，保留）
+persons_annotated.json
+persons_phased.json
+review_report.md
+phase_review.md
+
+# 密钥与环境（LLM API Key 走环境变量，切勿提交）
+.env
+*.local
+
+# 系统
+.DS_Store
+Thumbs.db

@@ -39,10 +39,8 @@ import random
 from datetime import datetime
 from pathlib import Path
 
-try:
-    import requests
-except ImportError:
-    sys.exit("缺少 requests 库，请先: pip install requests")
+# 注意：requests 采用延迟导入（见 call_llm）——mock 模式验证管道零依赖，
+# 只有真实调用 LLM 时才需要 pip install requests
 
 METATYPES = ["开创者", "守成者", "变革者", "专精者", "逢源者", "逆命者"]
 
@@ -103,12 +101,43 @@ def build_prompt(person: dict) -> str:
 只输出 JSON，格式：{{"metatype": "...", "consciousness_level": 1, "rationale": "...", "confidence": "high"}}"""
 
 
-def parse_llm_json(text: str) -> dict:
-    """从 LLM 回复中稳健提取 JSON（容忍 markdown 代码块/前后缀）"""
-    m = re.search(r"\{[^{}]*\}", text, re.DOTALL)
-    if not m:
+def extract_json(text: str) -> str:
+    """从 LLM 回复中提取第一个完整 JSON 对象字符串。
+
+    容忍：markdown 代码块包裹、前后杂讯、JSON 内一级以上嵌套、字符串中的花括号。
+    与 phase_pipeline.py 中的同名函数保持一致。
+    """
+    t = text.strip()
+    if t.startswith("```"):
+        t = re.sub(r"^```(?:json)?\s*", "", t)
+        t = re.sub(r"\s*```\s*$", "", t)
+    start = t.find("{")
+    if start < 0:
         raise ValueError("回复中未找到 JSON")
-    obj = json.loads(m.group(0))
+    depth, in_str, esc = 0, False, False
+    for i in range(start, len(t)):
+        ch = t[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+        elif ch == '"':
+            in_str = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return t[start:i + 1]
+    raise ValueError("回复中 JSON 不完整")
+
+
+def parse_llm_json(text: str) -> dict:
+    """从 LLM 回复中稳健提取 JSON（容忍 markdown 代码块/前后缀/嵌套）"""
+    obj = json.loads(extract_json(text))
     if obj.get("metatype") not in METATYPES:
         raise ValueError(f"metatype 非法: {obj.get('metatype')}")
     lvl = obj.get("consciousness_level")
@@ -120,6 +149,10 @@ def parse_llm_json(text: str) -> dict:
 
 
 def call_llm(prompt: str, model: str, base_url: str, api_key: str, max_retry: int = 3) -> dict:
+    try:
+        import requests
+    except ImportError:
+        raise RuntimeError("真实标注模式需要 requests 库，请先: pip install requests（mock 模式无需安装）")
     for attempt in range(max_retry):
         try:
             r = requests.post(

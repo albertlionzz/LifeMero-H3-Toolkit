@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """双通道混排算法效果模拟：验证 向量70% + 元类型30% 的排序变化"""
-import json, math
+import argparse
+import json
+import math
+import sys
+from pathlib import Path
 
 W_VEC, W_META = 0.7, 0.3
 
@@ -25,9 +29,24 @@ def rank(user_vec, user_meta, pool, same_bonus=1.0, level_diff=0.9):
         out.append({**p, "sim": round(sim, 3), "same": bool(same), "score": round(score, 3)})
     return sorted(out, key=lambda x: -x["score"])
 
-persons = json.load(open("sample_annotated.json", encoding="utf-8"))
-pool = [{"name": p["name"], "vector": p["vector"], "metatype": p["_annotation"]["metatype"],
-         "consciousness_level": p["_annotation"]["consciousness_level"]} for p in persons]
+ap = argparse.ArgumentParser(description="双通道混排算法效果模拟：向量70% + 元类型30%")
+ap.add_argument("--input", default="persons_annotated.json",
+                help="annotate_metatype.py 的输出文件（含 _annotation 字段）")
+args = ap.parse_args()
+
+path = Path(args.input)
+if not path.exists():
+    sys.exit(f"输入文件不存在: {args.input}\n"
+             f"请先运行: python annotate_metatype.py --input persons.json --mock "
+             f"--output persons_annotated.json")
+persons = json.loads(path.read_text(encoding="utf-8"))
+pool = [{"name": p.get("name", "?"), "vector": p.get("vector") or [0.5] * 6,
+         "metatype": p["_annotation"]["metatype"],
+         "consciousness_level": p["_annotation"]["consciousness_level"]}
+        for p in persons if "_annotation" in p]
+
+if not pool:
+    sys.exit(f"{args.input} 中没有带 _annotation 的人物，请先运行 annotate_metatype.py 标注")
 
 # 模拟用户：一位处于逆境逆转期的科技创业者（六维偏向：开创性高、逆商高、关系一般）
 user_vec = [0.85, 0.75, 0.5, 0.7, 0.6, 0.95]
